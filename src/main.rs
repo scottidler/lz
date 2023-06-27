@@ -7,11 +7,11 @@ use std::io::{
     Write,
 };
 use std::path::{
-    Path, 
+    Path,
     PathBuf,
 };
 use eyre::{
-    eyre, 
+    eyre,
     Result,
 };
 use orion::hazardous::stream::chacha20::{
@@ -28,7 +28,7 @@ use clap::Parser;
 use rpassword;
 
 #[derive(Clone, Debug, Parser)]
-#[command(name = "lz", about = "program for compressing|decompressing every file in a path")]
+#[command(name = "xz", about = "program for compressing|decompressing every file in a path")]
 #[command(version = "0.1.0")]
 #[command(author = "Scott A. Idler <scott.a.idler@gmail.com>")]
 #[command(arg_required_else_help = true)]
@@ -111,7 +111,7 @@ fn decompress(path: &Path, password: &SecUtf8) -> Result<()> {
         let output_filename = path.file_stem()
             .ok_or_else(|| eyre::eyre!("Failed to get file stem"))?
             .to_string_lossy()
-            .to_string();  // Convert Cow<str> to String
+            .to_string();
         let output_path = path.parent()
             .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
             .join(output_filename);
