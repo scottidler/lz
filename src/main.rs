@@ -22,6 +22,8 @@ use eyre::Result;
 use clap::Parser;
 use rpassword;
 
+use rayon::prelude::*;
+
 #[derive(Clone, Debug, Parser)]
 #[command(name = "stow", about = "program for compressing|encrypting every file in a path")]
 #[command(version = "0.1.0")]
@@ -52,9 +54,11 @@ struct CommandCli {
 
 fn compress(path: &Path, password: &SecUtf8) -> Result<()> {
     if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            compress(&entry?.path(), password)?;
-        }
+        let entries: Vec<_> = fs::read_dir(path)?.collect();
+        entries.par_iter().map(|entry| {
+            let entry = entry.as_ref().unwrap();
+            compress(&entry.path(), password)
+        }).collect::<Result<()>>()?;
     } else if path.is_file() {
         let output_filename = format!("{}.xz", path.file_name()
             .ok_or_else(|| eyre::eyre!("Failed to get file name"))?
@@ -82,9 +86,11 @@ fn compress(path: &Path, password: &SecUtf8) -> Result<()> {
 
 fn decompress(path: &Path, password: &SecUtf8) -> Result<()> {
     if path.is_dir() {
-        for entry in fs::read_dir(path)? {
-            decompress(&entry?.path(), password)?;
-        }
+        let entries: Vec<_> = fs::read_dir(path)?.collect();
+        entries.par_iter().map(|entry| {
+            let entry = entry.as_ref().unwrap();
+            decompress(&entry.path(), password)
+        }).collect::<Result<()>>()?;
     } else if path.is_file() {
         let output_filename = path.file_stem()
             .ok_or_else(|| eyre::eyre!("Failed to get file stem"))?
