@@ -17,12 +17,15 @@ use orion::hazardous::aead::chacha20poly1305::open;
 use orion::hazardous::hash::blake2::blake2b::Blake2b;
 use xz2::write::XzEncoder;
 use xz2::read::XzDecoder;
+use tempfile::Builder;
 use secstr::SecUtf8;
 use eyre::Result;
 use clap::Parser;
 use rpassword;
 
 use rayon::prelude::*;
+
+const STOW: &str = ".stow";
 
 #[derive(Clone, Debug, Parser)]
 #[command(name = "stow", about = "program for compressing|encrypting every file in a path")]
@@ -49,23 +52,35 @@ enum Command {
 
 #[derive(Clone, Debug, Parser)]
 struct CommandCli {
+
+    // optional to rename files with tmp name
+    #[clap(short, long, help = "rename files with tmp name")]
+    rename: bool,
+
     patterns: Vec<String>,
 }
 
-fn compress(path: &Path, password: &SecUtf8) -> Result<()> {
+fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
     if path.is_dir() {
         let entries: Vec<_> = fs::read_dir(path)?.collect();
         entries.par_iter().map(|entry| {
             let entry = entry.as_ref().unwrap();
-            compress(&entry.path(), password)
+            pack(&entry.path(), password, rename)
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
-        let output_filename = format!("{}.xz", path.file_name()
-            .ok_or_else(|| eyre::eyre!("Failed to get file name"))?
-            .to_string_lossy());
+        let output_filename = if rename {
+            let temp_file = Builder::new().suffix(STOW).tempfile()?;
+            temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
+        } else {
+            format!("{}{}", path.file_name()
+                .ok_or_else(|| eyre::eyre!("Failed to get file name"))?
+                .to_string_lossy(), STOW)
+        };
+        println!("output_filename: {}", output_filename);
         let output_path = path.parent()
             .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
             .join(output_filename);
+        println!("output_path: {}", output_path.display());
         let mut file_content = vec![];
         fs::File::open(path)?.read_to_end(&mut file_content)?;
         let mut encoder = XzEncoder::new(vec![], 6);
@@ -84,12 +99,12 @@ fn compress(path: &Path, password: &SecUtf8) -> Result<()> {
     Ok(())
 }
 
-fn decompress(path: &Path, password: &SecUtf8) -> Result<()> {
+fn load(path: &Path, password: &SecUtf8) -> Result<()> {
     if path.is_dir() {
         let entries: Vec<_> = fs::read_dir(path)?.collect();
         entries.par_iter().map(|entry| {
             let entry = entry.as_ref().unwrap();
-            decompress(&entry.path(), password)
+            load(&entry.path(), password)
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
         let output_filename = path.file_stem()
@@ -129,14 +144,14 @@ fn get_password() -> Result<SecUtf8> {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Pack(compress_cli)) => {
-            for pattern in compress_cli.patterns {
-                compress(Path::new(&pattern), &get_password()?)?;
+        Some(Command::Pack(pack_cli)) => {
+            for pattern in pack_cli.patterns {
+                pack(Path::new(&pattern), &get_password()?, pack_cli.rename)?;
             }
         },
-        Some(Command::Load(decompress_cli)) => {
-            for pattern in decompress_cli.patterns {
-                decompress(Path::new(&pattern), &get_password()?)?;
+        Some(Command::Load(load_cli)) => {
+            for pattern in load_cli.patterns {
+                load(Path::new(&pattern), &get_password()?)?;
             }
         },
         None => unreachable!(),
