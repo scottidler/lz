@@ -158,10 +158,10 @@ fn main() -> Result<()> {
     println!("{:?}", cli);
     match cli.command {
         Some(Command::Compress(_)) | Some(Command::Decompress(_)) => {
-            let prompt = format!("Please re-enter your password: ");
+            let prompt = "Please re-enter your password: ";
 
             // Convert the password to SecUtf8
-            let password = SecUtf8::from(rpassword::prompt_password(&prompt)?);
+            let password = SecUtf8::from(rpassword::prompt_password(prompt)?);
 
             match cli.command {
                 Some(Command::Compress(compress_cli)) => {
