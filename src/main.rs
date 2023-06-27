@@ -1,4 +1,4 @@
-#![allow(unused_imports)]
+//#![allow(unused_imports)]
 
 use std::fs;
 use std::io::{
@@ -25,6 +25,7 @@ use xz2::write::XzEncoder;
 use xz2::read::XzDecoder;
 use secstr::SecUtf8;
 use clap::Parser;
+use rpassword;
 
 #[derive(Clone, Debug, Parser)]
 #[command(name = "lz", about = "program for compressing|decompressing every file in a path")]
@@ -51,15 +52,13 @@ enum Command {
 
 #[derive(Clone, Debug, Parser)]
 struct CommandCli {
-    password: secstr::SecUtf8,
-
     patterns: Vec<String>,
 }
 
 fn compress(path: &Path, password: &SecUtf8) -> Result<()> {
     if path.is_dir() {
         for entry in fs::read_dir(path)? {
-            compress(&entry?.path(), password)?;  // recursive call for each directory entry
+            compress(&entry?.path(), password)?;
         }
     } else if path.is_file() {
         let output_filename = format!("{}.xz", path.file_name()
@@ -158,14 +157,24 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     println!("{:?}", cli);
     match cli.command {
-        Some(Command::Compress(compress_cli)) => {
-            for pattern in compress_cli.patterns {
-                compress(Path::new(&pattern), &compress_cli.password)?;
-            }
-        },
-        Some(Command::Decompress(decompress_cli)) => {
-            for pattern in decompress_cli.patterns {
-                decompress(Path::new(&pattern), &decompress_cli.password)?;
+        Some(Command::Compress(_)) | Some(Command::Decompress(_)) => {
+            let prompt = format!("Please re-enter your password: ");
+
+            // Convert the password to SecUtf8
+            let password = SecUtf8::from(rpassword::prompt_password(&prompt)?);
+
+            match cli.command {
+                Some(Command::Compress(compress_cli)) => {
+                    for pattern in compress_cli.patterns {
+                        compress(Path::new(&pattern), &password)?;
+                    }
+                },
+                Some(Command::Decompress(decompress_cli)) => {
+                    for pattern in decompress_cli.patterns {
+                        decompress(Path::new(&pattern), &password)?;
+                    }
+                },
+                None => unreachable!(),  // We already checked this case above
             }
         },
         None => {
