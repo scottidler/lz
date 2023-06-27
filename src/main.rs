@@ -69,11 +69,11 @@ fn compress(path: &Path, password: &SecUtf8) -> Result<()> {
             .join(output_filename);
 
         // Read the file content
-        let mut file_content = Vec::new();
+        let mut file_content = vec![];
         fs::File::open(path)?.read_to_end(&mut file_content)?;
 
         // Create a new XzEncoder with compression level 6 (default)
-        let mut encoder = XzEncoder::new(Vec::new(), 6);
+        let mut encoder = XzEncoder::new(vec![], 6);
 
         // Compress the file content
         encoder.write_all(&file_content)?;
@@ -117,7 +117,7 @@ fn decompress(path: &Path, password: &SecUtf8) -> Result<()> {
             .join(output_filename);
 
         // Read the file content
-        let mut file_content = Vec::new();
+        let mut file_content = vec![];
         fs::File::open(path)?.read_to_end(&mut file_content)?;
 
         // Hash the password to generate a 32-byte value
@@ -142,7 +142,7 @@ fn decompress(path: &Path, password: &SecUtf8) -> Result<()> {
         let mut decoder = XzDecoder::new(Cursor::new(decrypted_content));
 
         // Decompress the decrypted content
-        let mut decompressed_content = Vec::new();
+        let mut decompressed_content = vec![];
         decoder.read_to_end(&mut decompressed_content)?;
 
         // Write the decompressed content to the output file
