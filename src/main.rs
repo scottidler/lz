@@ -9,6 +9,10 @@ use std::path::{
     Path,
     PathBuf,
 };
+use eyre::{
+    Result,
+    WrapErr,
+};
 use orion::hazardous::stream::chacha20::{
     Nonce,
     SecretKey,
@@ -21,13 +25,9 @@ use xz2::read::XzDecoder;
 use tempfile::Builder;
 use rayon::prelude::*;
 use secstr::SecUtf8;
-use eyre::Result;
+use std::fs::File;
 use clap::Parser;
 use rpassword;
-
-use std::fs::File;
-use eyre::WrapErr;
-
 
 const STOW: &str = ".stow";
 
@@ -85,7 +85,11 @@ fn bundle(path: &Path) -> Result<Vec<u8>> {
     let mut tar_builder = tar::Builder::new(xz_encoder);
     let file_name = path.file_name().ok_or_else(|| eyre::eyre!("Failed to get file name"))?;
     let file_name_str = file_name.to_str().ok_or_else(|| eyre::eyre!("Failed to convert file name to string"))?;
-    tar_builder.append_file(file_name_str, &mut File::open(path).wrap_err_with(|| format!("Failed to open file: {:?}", path))?)?;
+    let mut header = tar::Header::new_gnu();
+    header.set_path(file_name_str)?;
+    header.set_size(path.metadata()?.len());
+    header.set_cksum();
+    tar_builder.append(&header, File::open(path)?)?;
     let xz_encoder = tar_builder.into_inner().wrap_err("Failed to finalize tar archive")?;
     xz_encoder.finish().wrap_err("Failed to finalize compression")?;
     Ok(compressed_data)
@@ -119,14 +123,10 @@ fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_load_path(path: &Path) -> Result<PathBuf> {
-    let output_filename = path.file_stem()
-        .ok_or_else(|| eyre::eyre!("Failed to get file stem"))?
-        .to_string_lossy()
-        .to_string();
+fn get_load_path(path: &Path, file_name: &str) -> Result<PathBuf> {
     let output_path = path.parent()
         .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
-        .join(output_filename);
+        .join(file_name);
     Ok(output_path)
 }
 
@@ -146,15 +146,17 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Vec<u8>> {
     Ok(decrypted_content)
 }
 
-fn unbundle(compressed_content: Vec<u8>) -> Result<Vec<u8>> {
+fn unbundle(compressed_content: Vec<u8>) -> Result<(Vec<u8>, String)> {
     let mut xz_decoder = XzDecoder::new(&compressed_content[..]);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut uncompressed_data = Vec::new();
+    let mut file_name = String::new();
     for entry in tar_archive.entries()? {
         let mut entry = entry?;
         entry.read_to_end(&mut uncompressed_data)?;
+        file_name = entry.path()?.to_str().unwrap().to_string();
     }
-    Ok(uncompressed_data)
+    Ok((uncompressed_data, file_name))
 }
 
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
@@ -165,9 +167,9 @@ fn load(path: &Path, password: &SecUtf8) -> Result<()> {
             load(&entry.path(), password)
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
-        let output_path = get_load_path(path)?;
         let decrypted_content = decrypt(path, password)?;
-        let decompressed_content = unbundle(decrypted_content)?;
+        let (decompressed_content, file_name) = unbundle(decrypted_content)?;
+        let output_path = get_load_path(path, &file_name)?;
         fs::File::create(&output_path)?.write_all(&decompressed_content)?;
         std::fs::remove_file(path)?;
     }
