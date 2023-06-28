@@ -146,8 +146,8 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Vec<u8>> {
     Ok(decrypted_content)
 }
 
-fn unbundle(compressed_content: Vec<u8>) -> Result<(Vec<u8>, String)> {
-    let mut xz_decoder = XzDecoder::new(&compressed_content[..]);
+fn unbundle(content: Vec<u8>) -> Result<(Vec<u8>, String)> {
+    let mut xz_decoder = XzDecoder::new(&content[..]);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut uncompressed_data = Vec::new();
     let mut file_name = String::new();
