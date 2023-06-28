@@ -1,3 +1,4 @@
+#![allow(unused_imports)]
 use std::fs;
 use std::io::{
     Cursor,
@@ -18,12 +19,15 @@ use orion::hazardous::hash::blake2::blake2b::Blake2b;
 use xz2::write::XzEncoder;
 use xz2::read::XzDecoder;
 use tempfile::Builder;
+use rayon::prelude::*;
 use secstr::SecUtf8;
 use eyre::Result;
 use clap::Parser;
 use rpassword;
 
-use rayon::prelude::*;
+use std::fs::File;
+use eyre::WrapErr;
+
 
 const STOW: &str = ".stow";
 
@@ -60,6 +64,44 @@ struct CommandCli {
     patterns: Vec<String>,
 }
 
+fn get_pack_path(path: &Path, rename: bool) -> Result<PathBuf> {
+    let output_filename = if rename {
+        let temp_file = Builder::new().suffix(STOW).tempfile()?;
+        temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
+    } else {
+        format!("{}{}", path.file_name()
+            .ok_or_else(|| eyre::eyre!("Failed to get file name"))?
+            .to_string_lossy(), STOW)
+    };
+    let output_path = path.parent()
+        .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
+        .join(output_filename);
+    Ok(output_path)
+}
+
+fn bundle(path: &Path) -> Result<Vec<u8>> {
+    let mut compressed_data = Vec::new();
+    let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
+    let mut tar_builder = tar::Builder::new(xz_encoder);
+    let file_name = path.file_name().ok_or_else(|| eyre::eyre!("Failed to get file name"))?;
+    let file_name_str = file_name.to_str().ok_or_else(|| eyre::eyre!("Failed to convert file name to string"))?;
+    tar_builder.append_file(file_name_str, &mut File::open(path).wrap_err_with(|| format!("Failed to open file: {:?}", path))?)?;
+    let xz_encoder = tar_builder.into_inner().wrap_err("Failed to finalize tar archive")?;
+    xz_encoder.finish().wrap_err("Failed to finalize compression")?;
+    Ok(compressed_data)
+}
+
+fn encrypt(content: Vec<u8>, password: &SecUtf8) -> Result<Vec<u8>> {
+    let mut hasher = Blake2b::new(32)?;
+    hasher.update(password.unsecure().as_bytes())?;
+    let hashed_password = hasher.finalize()?;
+    let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
+    let nonce = Nonce::from([0u8; 12]);
+    let mut dst_out_ct = vec![0u8; content.len() + 16];
+    chacha20poly1305::seal(&secret_key, &nonce, &content, None, &mut dst_out_ct)?;
+    Ok(dst_out_ct)
+}
+
 fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
     if path.is_dir() {
         let entries: Vec<_> = fs::read_dir(path)?.collect();
@@ -68,35 +110,51 @@ fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
             pack(&entry.path(), password, rename)
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
-        let output_filename = if rename {
-            let temp_file = Builder::new().suffix(STOW).tempfile()?;
-            temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
-        } else {
-            format!("{}{}", path.file_name()
-                .ok_or_else(|| eyre::eyre!("Failed to get file name"))?
-                .to_string_lossy(), STOW)
-        };
-        println!("output_filename: {}", output_filename);
-        let output_path = path.parent()
-            .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
-            .join(output_filename);
-        println!("output_path: {}", output_path.display());
-        let mut file_content = vec![];
-        fs::File::open(path)?.read_to_end(&mut file_content)?;
-        let mut encoder = XzEncoder::new(vec![], 6);
-        encoder.write_all(&file_content)?;
-        let compressed_content = encoder.finish()?;
-        let mut hasher = Blake2b::new(32)?;
-        hasher.update(password.unsecure().as_bytes())?;
-        let hashed_password = hasher.finalize()?;
-        let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
-        let nonce = Nonce::from([0u8; 12]);
-        let mut dst_out_ct = vec![0u8; compressed_content.len() + 16];
-        chacha20poly1305::seal(&secret_key, &nonce, &compressed_content, None, &mut dst_out_ct)?;
-        fs::File::create(&output_path)?.write_all(&dst_out_ct)?;
+        let output_path = get_pack_path(path, rename)?;
+        let compressed_content = bundle(path)?;
+        let encrypted_content = encrypt(compressed_content, password)?;
+        fs::File::create(&output_path)?.write_all(&encrypted_content)?;
         std::fs::remove_file(path)?;
     }
     Ok(())
+}
+
+fn get_load_path(path: &Path) -> Result<PathBuf> {
+    let output_filename = path.file_stem()
+        .ok_or_else(|| eyre::eyre!("Failed to get file stem"))?
+        .to_string_lossy()
+        .to_string();
+    let output_path = path.parent()
+        .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
+        .join(output_filename);
+    Ok(output_path)
+}
+
+fn decrypt(path: &Path, password: &SecUtf8) -> Result<Vec<u8>> {
+    let mut file_content = vec![];
+    fs::File::open(path)?.read_to_end(&mut file_content)?;
+    let mut hasher = Blake2b::new(32)?;
+    hasher.update(password.unsecure().as_bytes())?;
+    let hashed_password = hasher.finalize()?;
+    let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
+    let nonce = Nonce::from([0u8; 12]);
+    let mut decrypted_content = vec![0u8; file_content.len() - 16];
+    match open(&secret_key, &nonce, &file_content, None, &mut decrypted_content) {
+        Ok(_) => (),
+        Err(_) => return Err(eyre::eyre!("Decryption failed. The provided password may be incorrect.")),
+    };
+    Ok(decrypted_content)
+}
+
+fn unbundle(compressed_content: Vec<u8>) -> Result<Vec<u8>> {
+    let mut xz_decoder = XzDecoder::new(&compressed_content[..]);
+    let mut tar_archive = tar::Archive::new(&mut xz_decoder);
+    let mut uncompressed_data = Vec::new();
+    for entry in tar_archive.entries()? {
+        let mut entry = entry?;
+        entry.read_to_end(&mut uncompressed_data)?;
+    }
+    Ok(uncompressed_data)
 }
 
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
@@ -107,28 +165,9 @@ fn load(path: &Path, password: &SecUtf8) -> Result<()> {
             load(&entry.path(), password)
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
-        let output_filename = path.file_stem()
-            .ok_or_else(|| eyre::eyre!("Failed to get file stem"))?
-            .to_string_lossy()
-            .to_string();
-        let output_path = path.parent()
-            .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
-            .join(output_filename);
-        let mut file_content = vec![];
-        fs::File::open(path)?.read_to_end(&mut file_content)?;
-        let mut hasher = Blake2b::new(32)?;
-        hasher.update(password.unsecure().as_bytes())?;
-        let hashed_password = hasher.finalize()?;
-        let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
-        let nonce = Nonce::from([0u8; 12]);
-        let mut decrypted_content = vec![0u8; file_content.len() - 16];
-        match open(&secret_key, &nonce, &file_content, None, &mut decrypted_content) {
-            Ok(_) => (),
-            Err(_) => return Err(eyre::eyre!("Decryption failed. The provided password may be incorrect.")),
-        };
-        let mut decoder = XzDecoder::new(Cursor::new(decrypted_content));
-        let mut decompressed_content = vec![];
-        decoder.read_to_end(&mut decompressed_content)?;
+        let output_path = get_load_path(path)?;
+        let decrypted_content = decrypt(path, password)?;
+        let decompressed_content = unbundle(decrypted_content)?;
         fs::File::create(&output_path)?.write_all(&decompressed_content)?;
         std::fs::remove_file(path)?;
     }
