@@ -1,7 +1,6 @@
-#![allow(unused_imports)]
+//#![allow(unused_imports)]
 use std::fs;
 use std::io::{
-    Cursor,
     Read,
     Write,
 };
@@ -10,6 +9,7 @@ use std::path::{
     PathBuf,
 };
 use eyre::{
+    eyre,
     Result,
     WrapErr,
 };
@@ -18,7 +18,6 @@ use orion::hazardous::stream::chacha20::{
     SecretKey,
 };
 use orion::hazardous::aead::chacha20poly1305;
-use orion::hazardous::aead::chacha20poly1305::open;
 use orion::hazardous::hash::blake2::blake2b::Blake2b;
 use xz2::write::XzEncoder;
 use xz2::read::XzDecoder;
@@ -30,6 +29,8 @@ use clap::Parser;
 use rpassword;
 
 const STOW: &str = ".stow";
+
+type Buffer = Vec<u8>;
 
 #[derive(Clone, Debug, Parser)]
 #[command(name = "stow", about = "program for compressing|encrypting every file in a path")]
@@ -70,21 +71,21 @@ fn get_pack_path(path: &Path, rename: bool) -> Result<PathBuf> {
         temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
     } else {
         format!("{}{}", path.file_name()
-            .ok_or_else(|| eyre::eyre!("Failed to get file name"))?
+            .ok_or_else(|| eyre!("Failed to get file name"))?
             .to_string_lossy(), STOW)
     };
     let output_path = path.parent()
-        .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
+        .ok_or_else(|| eyre!("Failed to get parent directory"))?
         .join(output_filename);
     Ok(output_path)
 }
 
-fn bundle(path: &Path) -> Result<Vec<u8>> {
+fn bundle(path: &Path) -> Result<Buffer> {
     let mut compressed_data = Vec::new();
     let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
     let mut tar_builder = tar::Builder::new(xz_encoder);
-    let file_name = path.file_name().ok_or_else(|| eyre::eyre!("Failed to get file name"))?;
-    let file_name_str = file_name.to_str().ok_or_else(|| eyre::eyre!("Failed to convert file name to string"))?;
+    let file_name = path.file_name().ok_or_else(|| eyre!("Failed to get file name"))?;
+    let file_name_str = file_name.to_str().ok_or_else(|| eyre!("Failed to convert file name to string"))?;
     let mut header = tar::Header::new_gnu();
     header.set_path(file_name_str)?;
     header.set_size(path.metadata()?.len());
@@ -95,7 +96,7 @@ fn bundle(path: &Path) -> Result<Vec<u8>> {
     Ok(compressed_data)
 }
 
-fn encrypt(content: Vec<u8>, password: &SecUtf8) -> Result<Vec<u8>> {
+fn encrypt(content: Buffer, password: &SecUtf8) -> Result<Buffer> {
     let mut hasher = Blake2b::new(32)?;
     hasher.update(password.unsecure().as_bytes())?;
     let hashed_password = hasher.finalize()?;
@@ -125,12 +126,12 @@ fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
 
 fn get_load_path(path: &Path, file_name: &str) -> Result<PathBuf> {
     let output_path = path.parent()
-        .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
+        .ok_or_else(|| eyre!("Failed to get parent directory"))?
         .join(file_name);
     Ok(output_path)
 }
 
-fn decrypt(path: &Path, password: &SecUtf8) -> Result<Vec<u8>> {
+fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
     let mut file_content = vec![];
     fs::File::open(path)?.read_to_end(&mut file_content)?;
     let mut hasher = Blake2b::new(32)?;
@@ -139,14 +140,14 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Vec<u8>> {
     let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
     let nonce = Nonce::from([0u8; 12]);
     let mut decrypted_content = vec![0u8; file_content.len() - 16];
-    match open(&secret_key, &nonce, &file_content, None, &mut decrypted_content) {
+    match chacha20poly1305::open(&secret_key, &nonce, &file_content, None, &mut decrypted_content) {
         Ok(_) => (),
-        Err(_) => return Err(eyre::eyre!("Decryption failed. The provided password may be incorrect.")),
+        Err(_) => return Err(eyre!("Decryption failed. The provided password may be incorrect.")),
     };
     Ok(decrypted_content)
 }
 
-fn unbundle(content: Vec<u8>) -> Result<(Vec<u8>, String)> {
+fn unbundle(content: Buffer) -> Result<(Buffer, String)> {
     let mut xz_decoder = XzDecoder::new(&content[..]);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut uncompressed_data = Vec::new();
