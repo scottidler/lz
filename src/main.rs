@@ -70,8 +70,15 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
             .ok_or_else(|| eyre!("Failed to get file name"))?
             .to_string_lossy(), STOW)
     } else {
-        let temp_file = Builder::new().suffix(&format!(".{}", STOW)).tempfile()?;
-        temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
+        Builder::new()
+            .suffix(&format!(".{}", STOW))
+            .tempfile()
+            .wrap_err("Failed to create temporary file")?
+            .path()
+            .file_name()
+            .ok_or_else(|| eyre!("Failed to get file name from temp_file"))?
+            .to_string_lossy()
+            .into_owned()
     };
     let output_path = path.parent()
         .ok_or_else(|| eyre!("Failed to get parent directory"))?
@@ -116,11 +123,11 @@ fn encrypt(content: Buffer, password: &SecUtf8) -> Result<Buffer> {
 
 fn pack(path: &Path, password: &SecUtf8, keep_name: bool) -> Result<()> {
     if path.is_dir() {
-        let entries: Vec<_> = fs::read_dir(path)?.collect();
-        entries.par_iter().map(|entry| {
-            let entry = entry.as_ref().unwrap();
+        let entries: Result<Vec<_>, _> = fs::read_dir(path)?.collect();
+        let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| {
             pack(&entry.path(), password, keep_name)
-        }).collect::<Result<()>>()?;
+        }).collect();
+        results?;
     } else if path.is_file() {
         let output_path = get_pack_path(path, keep_name)?;
         let compressed_content = bundle(&vec![path])?;
@@ -177,11 +184,11 @@ fn unbundle(content: Buffer) -> Result<Vec<(Buffer, String)>> {
 
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
     if path.is_dir() {
-        let entries: Vec<_> = fs::read_dir(path)?.collect();
-        entries.par_iter().map(|entry| {
-            let entry = entry.as_ref().unwrap();
+        let entries: Result<Vec<_>, _> = fs::read_dir(path)?.collect();
+        let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| {
             load(&entry.path(), password)
-        }).collect::<Result<()>>()?;
+        }).collect();
+        results?;
     } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(STOW) {
         let decrypted_content = decrypt(path, password)?;
         for (decompressed_content, filename) in unbundle(decrypted_content)? {
