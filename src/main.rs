@@ -58,22 +58,21 @@ enum Command {
 
 #[derive(Clone, Debug, Parser)]
 struct CommandCli {
-
-    // optional to rename files with tmp name
-    #[clap(short, long, help = "rename files with tmp name")]
-    rename: bool,
+    // optional to keep original file name
+    #[clap(short = 'k', long, help = "keep original file name")]
+    keep_name: bool,
 
     patterns: Vec<String>,
 }
 
-fn get_pack_path(path: &Path, rename: bool) -> Result<PathBuf> {
-    let output_filename = if rename {
-        let temp_file = Builder::new().suffix(STOW).tempfile()?;
-        temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
-    } else {
+fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
+    let output_filename = if keep_name {
         format!("{}{}", path.file_name()
             .ok_or_else(|| eyre!("Failed to get file name"))?
             .to_string_lossy(), STOW)
+    } else {
+        let temp_file = Builder::new().suffix(STOW).tempfile()?;
+        temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
     };
     let output_path = path.parent()
         .ok_or_else(|| eyre!("Failed to get parent directory"))?
@@ -116,15 +115,15 @@ fn encrypt(content: Buffer, password: &SecUtf8) -> Result<Buffer> {
     Ok(dst_out_ct)
 }
 
-fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
+fn pack(path: &Path, password: &SecUtf8, keep_name: bool) -> Result<()> {
     if path.is_dir() {
         let entries: Vec<_> = fs::read_dir(path)?.collect();
         entries.par_iter().map(|entry| {
             let entry = entry.as_ref().unwrap();
-            pack(&entry.path(), password, rename)
+            pack(&entry.path(), password, keep_name)
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
-        let output_path = get_pack_path(path, rename)?;
+        let output_path = get_pack_path(path, keep_name)?;
         let compressed_content = bundle(&vec![path])?;
         let encrypted_content = encrypt(compressed_content, password)?;
         fs::File::create(&output_path)?.write_all(&encrypted_content)?;
@@ -206,7 +205,7 @@ fn main() -> Result<()> {
     match cli.command {
         Some(Command::Pack(pack_cli)) => {
             for pattern in pack_cli.patterns {
-                pack(Path::new(&pattern), &get_password()?, pack_cli.rename)?;
+                pack(Path::new(&pattern), &get_password()?, pack_cli.keep_name)?;
             }
         },
         Some(Command::Load(load_cli)) => {
