@@ -117,7 +117,7 @@ fn encrypt(content: &[u8], password: &SecUtf8) -> Result<Buffer> {
     let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
     let nonce = Nonce::from([0u8; 12]);
     let mut encrypted_content = vec![0u8; content.len() + 16];
-    chacha20poly1305::seal(&secret_key, &nonce, &content, None, &mut encrypted_content)?;
+    chacha20poly1305::seal(&secret_key, &nonce, content, None, &mut encrypted_content)?;
     Ok(encrypted_content)
 }
 
@@ -163,7 +163,7 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
 }
 
 fn unbundle(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
-    let mut xz_decoder = XzDecoder::new(&content[..]);
+    let mut xz_decoder = XzDecoder::new(content);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut results = vec![];
 
