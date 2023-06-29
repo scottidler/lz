@@ -29,7 +29,7 @@ use std::fs::File;
 use clap::Parser;
 use rpassword;
 
-const STOW: &str = ".stow";
+const STOW: &str = "stow";
 
 type Buffer = Vec<u8>;
 
@@ -58,8 +58,7 @@ enum Command {
 
 #[derive(Clone, Debug, Parser)]
 struct CommandCli {
-    // optional to keep original file name
-    #[clap(short = 'k', long, help = "keep original file name")]
+    #[clap(short, long, help = "keep original file name")]
     keep_name: bool,
 
     patterns: Vec<String>,
@@ -67,11 +66,11 @@ struct CommandCli {
 
 fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
     let output_filename = if keep_name {
-        format!("{}{}", path.file_name()
+        format!("{}.{}", path.file_name()
             .ok_or_else(|| eyre!("Failed to get file name"))?
             .to_string_lossy(), STOW)
     } else {
-        let temp_file = Builder::new().suffix(STOW).tempfile()?;
+        let temp_file = Builder::new().suffix(&format!(".{}", STOW)).tempfile()?;
         temp_file.path().file_name().unwrap().to_string_lossy().into_owned()
     };
     let output_path = path.parent()
@@ -183,7 +182,7 @@ fn load(path: &Path, password: &SecUtf8) -> Result<()> {
             let entry = entry.as_ref().unwrap();
             load(&entry.path(), password)
         }).collect::<Result<()>>()?;
-    } else if path.is_file() {
+    } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(STOW) {
         let decrypted_content = decrypt(path, password)?;
         for (decompressed_content, filename) in unbundle(decrypted_content)? {
             let output_path = get_load_path(path, &filename)?;
