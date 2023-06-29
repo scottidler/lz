@@ -1,4 +1,5 @@
 //#![allow(unused_imports)]
+
 use std::fs;
 use std::io::{
     Read,
@@ -80,19 +81,27 @@ fn get_pack_path(path: &Path, rename: bool) -> Result<PathBuf> {
     Ok(output_path)
 }
 
-fn bundle(path: &Path) -> Result<Buffer> {
+fn bundle(paths: &[&Path]) -> Result<Buffer> {
     let mut compressed_data = Vec::new();
     let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
     let mut tar_builder = tar::Builder::new(xz_encoder);
-    let file_name = path.file_name().ok_or_else(|| eyre!("Failed to get file name"))?;
-    let file_name_str = file_name.to_str().ok_or_else(|| eyre!("Failed to convert file name to string"))?;
-    let mut header = tar::Header::new_gnu();
-    header.set_path(file_name_str)?;
-    header.set_size(path.metadata()?.len());
-    header.set_cksum();
-    tar_builder.append(&header, File::open(path)?)?;
+
+    for path in paths {
+        let filename = path
+            .file_name()
+            .ok_or_else(|| eyre!("Failed to get file name"))?
+            .to_str()
+            .ok_or_else(|| eyre!("Failed to convert file name to string"))?;
+        let mut header = tar::Header::new_gnu();
+        header.set_path(filename)?;
+        header.set_size(path.metadata()?.len());
+        header.set_cksum();
+        tar_builder.append(&header, File::open(path)?)?;
+    }
+
     let xz_encoder = tar_builder.into_inner().wrap_err("Failed to finalize tar archive")?;
     xz_encoder.finish().wrap_err("Failed to finalize compression")?;
+
     Ok(compressed_data)
 }
 
@@ -116,7 +125,7 @@ fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
         let output_path = get_pack_path(path, rename)?;
-        let compressed_content = bundle(path)?;
+        let compressed_content = bundle(&vec![path])?;
         let encrypted_content = encrypt(compressed_content, password)?;
         fs::File::create(&output_path)?.write_all(&encrypted_content)?;
         std::fs::remove_file(path)?;
@@ -124,10 +133,11 @@ fn pack(path: &Path, password: &SecUtf8, rename: bool) -> Result<()> {
     Ok(())
 }
 
-fn get_load_path(path: &Path, file_name: &str) -> Result<PathBuf> {
-    let output_path = path.parent()
+fn get_load_path(path: &Path, filename: &str) -> Result<PathBuf> {
+    let output_path = path
+        .parent()
         .ok_or_else(|| eyre!("Failed to get parent directory"))?
-        .join(file_name);
+        .join(filename);
     Ok(output_path)
 }
 
@@ -147,17 +157,24 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
     Ok(decrypted_content)
 }
 
-fn unbundle(content: Buffer) -> Result<(Buffer, String)> {
+fn unbundle(content: Buffer) -> Result<Vec<(Buffer, String)>> {
     let mut xz_decoder = XzDecoder::new(&content[..]);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
-    let mut uncompressed_data = Vec::new();
-    let mut file_name = String::new();
+    let mut results = Vec::new();
+
     for entry in tar_archive.entries()? {
         let mut entry = entry?;
+        let mut uncompressed_data = vec![];
         entry.read_to_end(&mut uncompressed_data)?;
-        file_name = entry.path()?.to_str().unwrap().to_string();
+        let filename = entry
+            .path()
+            .wrap_err("Failed to get file path")?
+            .to_str()
+            .ok_or_else(|| eyre!("Failed to convert file path to string"))?
+            .to_string();
+        results.push((uncompressed_data, filename));
     }
-    Ok((uncompressed_data, file_name))
+    Ok(results)
 }
 
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
@@ -169,9 +186,10 @@ fn load(path: &Path, password: &SecUtf8) -> Result<()> {
         }).collect::<Result<()>>()?;
     } else if path.is_file() {
         let decrypted_content = decrypt(path, password)?;
-        let (decompressed_content, file_name) = unbundle(decrypted_content)?;
-        let output_path = get_load_path(path, &file_name)?;
-        fs::File::create(&output_path)?.write_all(&decompressed_content)?;
+        for (decompressed_content, filename) in unbundle(decrypted_content)? {
+            let output_path = get_load_path(path, &filename)?;
+            fs::File::create(&output_path)?.write_all(&decompressed_content)?;
+        }
         std::fs::remove_file(path)?;
     }
     Ok(())
