@@ -27,7 +27,7 @@ use rayon::prelude::*;
 use secstr::SecUtf8;
 use std::fs::File;
 use clap::Parser;
-use rpassword;
+
 
 const STOW: &str = "stow";
 
@@ -71,7 +71,7 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
             .to_string_lossy(), STOW)
     } else {
         Builder::new()
-            .suffix(&format!(".{}", STOW))
+            .suffix(&format!(".{STOW}"))
             .tempfile()
             .wrap_err("Failed to create temporary file")?
             .path()
@@ -110,15 +110,15 @@ fn bundle(paths: &[&Path]) -> Result<Buffer> {
     Ok(compressed_data)
 }
 
-fn encrypt(content: Buffer, password: &SecUtf8) -> Result<Buffer> {
+fn encrypt(content: &[u8], password: &SecUtf8) -> Result<Buffer> {
     let mut hasher = Blake2b::new(32)?;
     hasher.update(password.unsecure().as_bytes())?;
     let hashed_password = hasher.finalize()?;
     let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
     let nonce = Nonce::from([0u8; 12]);
-    let mut dst_out_ct = vec![0u8; content.len() + 16];
-    chacha20poly1305::seal(&secret_key, &nonce, &content, None, &mut dst_out_ct)?;
-    Ok(dst_out_ct)
+    let mut encrypted_content = vec![0u8; content.len() + 16];
+    chacha20poly1305::seal(&secret_key, &nonce, &content, None, &mut encrypted_content)?;
+    Ok(encrypted_content)
 }
 
 fn pack(path: &Path, password: &SecUtf8, keep_name: bool) -> Result<()> {
@@ -130,9 +130,9 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool) -> Result<()> {
         results?;
     } else if path.is_file() {
         let output_path = get_pack_path(path, keep_name)?;
-        let compressed_content = bundle(&vec![path])?;
-        let encrypted_content = encrypt(compressed_content, password)?;
-        fs::File::create(&output_path)?.write_all(&encrypted_content)?;
+        let compressed_content = bundle(&[path])?;
+        let encrypted_content = encrypt(&compressed_content, password)?;
+        fs::File::create(output_path)?.write_all(&encrypted_content)?;
         std::fs::remove_file(path)?;
     }
     Ok(())
@@ -162,7 +162,7 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
     Ok(decrypted_content)
 }
 
-fn unbundle(content: Buffer) -> Result<Vec<(Buffer, String)>> {
+fn unbundle(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
     let mut xz_decoder = XzDecoder::new(&content[..]);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut results = vec![];
@@ -191,7 +191,7 @@ fn load(path: &Path, password: &SecUtf8) -> Result<()> {
         results?;
     } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(STOW) {
         let decrypted_content = decrypt(path, password)?;
-        for (decompressed_content, filename) in unbundle(decrypted_content)? {
+        for (decompressed_content, filename) in unbundle(&decrypted_content)? {
             let output_path = get_load_path(path, &filename)?;
             fs::File::create(&output_path)?.write_all(&decompressed_content)?;
         }
