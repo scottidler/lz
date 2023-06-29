@@ -87,7 +87,7 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
 }
 
 fn bundle(paths: &[&Path]) -> Result<Buffer> {
-    let mut compressed_data = Vec::new();
+    let mut compressed_data = vec![];
     let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
     let mut tar_builder = tar::Builder::new(xz_encoder);
 
@@ -165,7 +165,7 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
 fn unbundle(content: Buffer) -> Result<Vec<(Buffer, String)>> {
     let mut xz_decoder = XzDecoder::new(&content[..]);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
-    let mut results = Vec::new();
+    let mut results = vec![];
 
     for entry in tar_archive.entries()? {
         let mut entry = entry?;
