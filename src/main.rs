@@ -165,48 +165,6 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_size: usize) ->
     Ok(())
 }
 
-
-/*
-fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_size: usize) -> Result<()> {
-    if path.is_dir() {
-        let entries: Vec<_> = fs::read_dir(path)?
-            .map(|res| res.map(|e| e.path()))
-            .collect::<Result<Vec<_>, std::io::Error>>()
-            .wrap_err("Failed to read directory entries")?;
-
-        let bundle_size = if keep_name { 1 } else { bundle_size };
-
-        // Group files into bundles
-        let chunks: Vec<Vec<PathBuf>> = entries.chunks(bundle_size).map(|chunk| chunk.to_vec()).collect();
-
-        // Process each bundle in parallel
-        chunks.par_iter().try_for_each(|chunk| {
-            let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
-            let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
-            bundle(&bundle_paths, &output_path, password)
-        }).wrap_err("Failed to process file bundles")?;
-    } else if path.is_file() {
-        let output_path = get_pack_path(path, keep_name)?;
-        bundle(&[path], &output_path, password)?;
-    }
-    Ok(())
-}
-
-fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_size: usize) -> Result<()> {
-    if path.is_dir() {
-        let entries: Result<Vec<_>, _> = fs::read_dir(path)?.collect();
-        let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| {
-            pack(&entry.path(), password, keep_name, bundle_size)
-        }).collect();
-        results?;
-    } else if path.is_file() {
-        let output_path = get_pack_path(path, keep_name)?;
-        bundle(&[path], &output_path, password)?;
-    }
-    Ok(())
-}
-*/
-
 fn get_load_path(path: &Path, filename: &str) -> Result<PathBuf> {
     let output_path = path
         .parent()
