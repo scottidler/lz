@@ -62,6 +62,9 @@ struct CommandCli {
     keep_name: bool,
 
     #[clap(short, long, value_name = "INT", default_value = "2", help = "number files per archive")]
+    bundle_count: usize,
+
+    #[clap(short, long, value_name = "BYTES", default_value = "1M", help = "maximum archive size")]
     bundle_size: usize,
 
     patterns: Vec<String>,
@@ -131,21 +134,27 @@ fn bundle(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<()>
     Ok(())
 }
 
-fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_size: usize) -> Result<()> {
+
+fn get_chunks_and_dirs(entries: &[PathBuf], keep_name: bool, bundle_count: usize, bundle_size: usize) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
+    let bundle_count = if keep_name { 1 } else { bundle_count };
+    let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
+    let chunks = files.chunks(bundle_count).map(|chunk| chunk.to_vec()).collect();
+    (chunks, dirs)
+}
+
+fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -> Result<()> {
     if path.is_dir() {
         let entries: Vec<_> = fs::read_dir(path)?
             .map(|res| res.map(|e| e.path()))
             .collect::<Result<Vec<_>, std::io::Error>>()
             .wrap_err("Failed to read directory entries")?;
-        let bundle_size = if keep_name { 1 } else { bundle_size };
-        let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
-        let chunks: Vec<Vec<&PathBuf>> = files.chunks(bundle_size).map(|chunk| chunk.to_vec()).collect();
+        let (chunks, dirs) = get_chunks_and_dirs(&entries, keep_name, bundle_count, 0);
         chunks.par_iter().try_for_each(|chunk| {
             let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
             let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
             bundle(&bundle_paths, &output_path, password)
         }).wrap_err("Failed to process file bundles")?;
-        dirs.par_iter().try_for_each(|dir| pack(dir, password, keep_name, bundle_size))?;
+        dirs.par_iter().try_for_each(|dir| pack(dir, password, keep_name, bundle_count))?;
     } else if path.is_file() {
         let output_path = get_pack_path(path, keep_name)?;
         bundle(&[path], &output_path, password)?;
@@ -224,9 +233,9 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Pack(pack_cli)) => {
-            let bundle_size = if pack_cli.keep_name { 1 } else { pack_cli.bundle_size };
+            let bundle_count = if pack_cli.keep_name { 1 } else { pack_cli.bundle_count };
             for pattern in pack_cli.patterns {
-                pack(Path::new(&pattern), &get_password()?, pack_cli.keep_name, bundle_size)?;
+                pack(Path::new(&pattern), &get_password()?, pack_cli.keep_name, bundle_count)?;
             }
         },
         Some(Command::Load(load_cli)) => {
