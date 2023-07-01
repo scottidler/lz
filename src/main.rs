@@ -93,7 +93,6 @@ fn tar_xz(paths: &[&Path]) -> Result<Buffer> {
     let mut compressed_data = vec![];
     let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
     let mut tar_builder = tar::Builder::new(xz_encoder);
-
     for path in paths {
         let filename = path
             .file_name()
@@ -106,10 +105,8 @@ fn tar_xz(paths: &[&Path]) -> Result<Buffer> {
         header.set_cksum();
         tar_builder.append(&header, File::open(path)?)?;
     }
-
     let xz_encoder = tar_builder.into_inner().wrap_err("Failed to finalize tar archive")?;
     xz_encoder.finish().wrap_err("Failed to finalize compression")?;
-
     Ok(compressed_data)
 }
 
@@ -140,23 +137,14 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_size: usize) ->
             .map(|res| res.map(|e| e.path()))
             .collect::<Result<Vec<_>, std::io::Error>>()
             .wrap_err("Failed to read directory entries")?;
-
         let bundle_size = if keep_name { 1 } else { bundle_size };
-
-        // Separate files and directories
         let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
-
-        // Group files into bundles
         let chunks: Vec<Vec<&PathBuf>> = files.chunks(bundle_size).map(|chunk| chunk.to_vec()).collect();
-
-        // Process each bundle in parallel
         chunks.par_iter().try_for_each(|chunk| {
             let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
             let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
             bundle(&bundle_paths, &output_path, password)
         }).wrap_err("Failed to process file bundles")?;
-
-        // Recurse into subdirectories
         dirs.par_iter().try_for_each(|dir| pack(dir, password, keep_name, bundle_size))?;
     } else if path.is_file() {
         let output_path = get_pack_path(path, keep_name)?;
@@ -193,7 +181,6 @@ fn un_tar_xz(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
     let mut xz_decoder = XzDecoder::new(content);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut results = vec![];
-
     for entry in tar_archive.entries()? {
         let mut entry = entry?;
         let mut uncompressed_data = vec![];
