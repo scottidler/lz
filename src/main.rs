@@ -1,33 +1,19 @@
 //#![allow(unused_imports)]
 
-use std::fs;
-use std::io::{
-    Read,
-    Write,
-};
-use std::path::{
-    Path,
-    PathBuf,
-};
-use eyre::{
-    eyre,
-    Result,
-    WrapErr,
-};
-use orion::hazardous::stream::chacha20::{
-    Nonce,
-    SecretKey,
-};
+use clap::Parser;
+use eyre::{eyre, Result, WrapErr};
 use orion::hazardous::aead::chacha20poly1305;
 use orion::hazardous::hash::blake2::blake2b::Blake2b;
-use xz2::write::XzEncoder;
-use xz2::read::XzDecoder;
-use tempfile::Builder;
+use orion::hazardous::stream::chacha20::{Nonce, SecretKey};
 use rayon::prelude::*;
 use secstr::SecUtf8;
+use std::fs;
 use std::fs::File;
-use clap::Parser;
-
+use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
+use tempfile::Builder;
+use xz2::read::XzDecoder;
+use xz2::write::XzEncoder;
 
 const STOW: &str = "stow";
 
@@ -61,10 +47,22 @@ struct CommandCli {
     #[clap(short, long, help = "keep original file name")]
     keep_name: bool,
 
-    #[clap(short, long, value_name = "INT", default_value = "2", help = "number files per archive")]
+    #[clap(
+        short,
+        long,
+        value_name = "INT",
+        default_value = "2",
+        help = "number files per archive"
+    )]
     bundle_count: usize,
 
-    #[clap(short, long, value_name = "BYTES", default_value = "1M", help = "maximum archive size")]
+    #[clap(
+        short,
+        long,
+        value_name = "BYTES",
+        default_value = "1M",
+        help = "maximum archive size"
+    )]
     bundle_size: usize,
 
     patterns: Vec<String>,
@@ -72,9 +70,13 @@ struct CommandCli {
 
 fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
     let output_filename = if keep_name {
-        format!("{}.{}", path.file_name()
-            .ok_or_else(|| eyre!("Failed to get file name"))?
-            .to_string_lossy(), STOW)
+        format!(
+            "{}.{}",
+            path.file_name()
+                .ok_or_else(|| eyre!("Failed to get file name"))?
+                .to_string_lossy(),
+            STOW
+        )
     } else {
         Builder::new()
             .suffix(&format!(".{STOW}"))
@@ -86,7 +88,8 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
             .to_string_lossy()
             .into_owned()
     };
-    let output_path = path.parent()
+    let output_path = path
+        .parent()
         .ok_or_else(|| eyre!("Failed to get parent directory"))?
         .join(output_filename);
     Ok(output_path)
@@ -134,8 +137,12 @@ fn bundle(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<()>
     Ok(())
 }
 
-
-fn get_chunks_and_dirs(entries: &[PathBuf], keep_name: bool, bundle_count: usize, bundle_size: usize) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
+fn get_chunks_and_dirs(
+    entries: &[PathBuf],
+    keep_name: bool,
+    bundle_count: usize,
+    _bundle_size: usize,
+) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
     let bundle_count = if keep_name { 1 } else { bundle_count };
     let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
     let chunks = files.chunks(bundle_count).map(|chunk| chunk.to_vec()).collect();
@@ -149,12 +156,16 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -
             .collect::<Result<Vec<_>, std::io::Error>>()
             .wrap_err("Failed to read directory entries")?;
         let (chunks, dirs) = get_chunks_and_dirs(&entries, keep_name, bundle_count, 0);
-        chunks.par_iter().try_for_each(|chunk| {
-            let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
-            let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
-            bundle(&bundle_paths, &output_path, password)
-        }).wrap_err("Failed to process file bundles")?;
-        dirs.par_iter().try_for_each(|dir| pack(dir, password, keep_name, bundle_count))?;
+        chunks
+            .par_iter()
+            .try_for_each(|chunk| {
+                let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
+                let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
+                bundle(&bundle_paths, &output_path, password)
+            })
+            .wrap_err("Failed to process file bundles")?;
+        dirs.par_iter()
+            .try_for_each(|dir| pack(dir, password, keep_name, bundle_count))?;
     } else if path.is_file() {
         let output_path = get_pack_path(path, keep_name)?;
         bundle(&[path], &output_path, password)?;
@@ -208,9 +219,7 @@ fn un_tar_xz(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
     if path.is_dir() {
         let entries: Result<Vec<_>, _> = fs::read_dir(path)?.collect();
-        let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| {
-            load(&entry.path(), password)
-        }).collect();
+        let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| load(&entry.path(), password)).collect();
         results?;
     } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(STOW) {
         let decrypted_content = decrypt(path, password)?;
@@ -237,12 +246,12 @@ fn main() -> Result<()> {
             for pattern in pack_cli.patterns {
                 pack(Path::new(&pattern), &get_password()?, pack_cli.keep_name, bundle_count)?;
             }
-        },
+        }
         Some(Command::Load(load_cli)) => {
             for pattern in load_cli.patterns {
                 load(Path::new(&pattern), &get_password()?)?;
             }
-        },
+        }
         None => unreachable!(),
     }
     Ok(())
