@@ -15,6 +15,14 @@ use tempfile::Builder;
 use xz2::read::XzDecoder;
 use xz2::write::XzEncoder;
 use std::str::FromStr;
+use log::info;
+use sysinfo::{ProcessExt, System, SystemExt};
+use log::LevelFilter;
+use log4rs::{
+    append::file::FileAppender,
+    config::{Appender, Config, Root},
+    encode::pattern::PatternEncoder,
+};
 
 const STOW: &str = "stow";
 
@@ -49,7 +57,7 @@ struct CommandCli {
     keep_name: bool,
 
     #[clap(
-        short,
+        short = 'c',
         long,
         value_name = "INT",
         default_value = "2",
@@ -58,7 +66,7 @@ struct CommandCli {
     bundle_count: usize,
 
     #[clap(
-        short,
+        short = 's',
         long,
         value_name = "BYTES",
         default_value = "1M",
@@ -93,6 +101,7 @@ fn parse_size(size: &str) -> Result<usize, SizeParseError> {
 }
 
 fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
+    info!("get_pack_path: path={path:?} keep_name={keep_name}");
     let output_filename = if keep_name {
         format!(
             "{}.{}",
@@ -114,12 +123,14 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
     };
     let output_path = path
         .parent()
-        .ok_or_else(|| eyre!("Failed to get parent directory"))?
+        .ok_or_else(|| eyre!("Failed to get parent directory for path: {:?}", path))?
         .join(output_filename);
+
     Ok(output_path)
 }
 
 fn tar_xz(paths: &[&Path]) -> Result<Buffer> {
+    info!("tar_xz: paths={paths:?}");
     let mut compressed_data = vec![];
     let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
     let mut tar_builder = tar::Builder::new(xz_encoder);
@@ -141,6 +152,7 @@ fn tar_xz(paths: &[&Path]) -> Result<Buffer> {
 }
 
 fn encrypt(content: &[u8], password: &SecUtf8) -> Result<Buffer> {
+    info!("encrypt: content.len()={}", content.len());
     let mut hasher = Blake2b::new(32)?;
     hasher.update(password.unsecure().as_bytes())?;
     let hashed_password = hasher.finalize()?;
@@ -152,6 +164,7 @@ fn encrypt(content: &[u8], password: &SecUtf8) -> Result<Buffer> {
 }
 
 fn bundle(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<()> {
+    info!("bundle: paths={paths:?} output_path={output_path:?}");
     let compressed_content = tar_xz(paths)?;
     let encrypted_content = encrypt(&compressed_content, password)?;
     fs::File::create(output_path)?.write_all(&encrypted_content)?;
@@ -167,14 +180,35 @@ fn get_chunks_and_dirs(
     bundle_count: usize,
     _bundle_size: usize,
 ) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
+    info!(
+        "get_chunks_and_dirs: entries.len()={} keep_name={} bundle_count={}",
+        entries.len(),
+        keep_name,
+        bundle_count);
     let bundle_count = if keep_name { 1 } else { bundle_count };
     let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
     let chunks = files.chunks(bundle_count).map(|chunk| chunk.to_vec()).collect();
     (chunks, dirs)
 }
 
+fn log_resource_usage() -> Result<()> {
+    let my_pid = sysinfo::get_current_pid().map_err(|e| eyre!(e))?;
+    let mut system = System::new_all();
+    system.refresh_all();
+    let process = system.process(my_pid).ok_or_else(|| eyre!("Failed to find current process"))?;
+    let memory_usage = process.memory();
+    info!("memory: {} KB", memory_usage);
+    let num_threads = process.tasks.len();
+    info!("threads: {}", num_threads);
+    Ok(())
+}
+
 fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -> Result<()> {
+    info!("pack: path={path:?} keep_name={keep_name} bundle_count={bundle_count}");
+    log_resource_usage()?;
+
     if path.is_dir() {
+        info!("pack: path is dir");
         let entries: Vec<_> = fs::read_dir(path)?
             .map(|res| res.map(|e| e.path()))
             .collect::<Result<Vec<_>, std::io::Error>>()
@@ -184,20 +218,25 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -
             .par_iter()
             .try_for_each(|chunk| {
                 let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
+                info!("pack: bundle_paths={bundle_paths:?}");
                 let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
+                info!("pack: output_path={output_path:?}");
                 bundle(&bundle_paths, &output_path, password)
             })
             .wrap_err("Failed to process file bundles")?;
         dirs.par_iter()
             .try_for_each(|dir| pack(dir, password, keep_name, bundle_count))?;
     } else if path.is_file() {
+        info!("pack: path is file");
         let output_path = get_pack_path(path, keep_name)?;
+        info!("pack: output_path={output_path:?}");
         bundle(&[path], &output_path, password)?;
     }
     Ok(())
 }
 
 fn get_load_path(path: &Path, filename: &str) -> Result<PathBuf> {
+    info!("get_load_path: path={path:?} filename={filename}");
     let output_path = path
         .parent()
         .ok_or_else(|| eyre!("Failed to get parent directory"))?
@@ -206,6 +245,7 @@ fn get_load_path(path: &Path, filename: &str) -> Result<PathBuf> {
 }
 
 fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
+    info!("decrypt: path={path:?}");
     let mut file_content = vec![];
     fs::File::open(path)?.read_to_end(&mut file_content)?;
     let mut hasher = Blake2b::new(32)?;
@@ -222,6 +262,7 @@ fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
 }
 
 fn un_tar_xz(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
+    info!("un_tar_xz: content.len()={}", content.len());
     let mut xz_decoder = XzDecoder::new(content);
     let mut tar_archive = tar::Archive::new(&mut xz_decoder);
     let mut results = vec![];
@@ -241,14 +282,18 @@ fn un_tar_xz(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
 }
 
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
+    info!("load: path={path:?}");
     if path.is_dir() {
+        info!("load: path is dir");
         let entries: Result<Vec<_>, _> = fs::read_dir(path)?.collect();
         let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| load(&entry.path(), password)).collect();
         results?;
     } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(STOW) {
+        info!("load: path is file and the extension is stow");
         let decrypted_content = decrypt(path, password)?;
         for (decompressed_content, filename) in un_tar_xz(&decrypted_content)? {
             let output_path = get_load_path(path, &filename)?;
+            info!("load: output_path={output_path:?}");
             fs::File::create(&output_path)?.write_all(&decompressed_content)?;
         }
         std::fs::remove_file(path)?;
@@ -262,8 +307,31 @@ fn get_password() -> Result<SecUtf8> {
     Ok(password)
 }
 
+fn setup_logging() -> Result<()> {
+    let log_file_path = std::env::current_exe()?
+        .parent()
+        .ok_or_else(|| eyre::eyre!("Failed to get parent directory"))?
+        .join("stow.log");
+
+    let logfile = FileAppender::builder()
+        .encoder(Box::new(PatternEncoder::new("{d(%Y-%m-%d %H:%M:%S%.3f)} [{l}] {m}{n}")))
+        .build(log_file_path)?;
+
+    let config = Config::builder()
+        .appender(Appender::builder().build("logfile", Box::new(logfile)))
+        .build(
+            Root::builder()
+                .appender("logfile")
+                .build(LevelFilter::Info),
+        )?;
+    log4rs::init_config(config)?;
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let cli = Cli::parse();
+    setup_logging()?;
+
     match cli.command {
         Some(Command::Pack(pack_cli)) => {
             let bundle_count = if pack_cli.keep_name { 1 } else { pack_cli.bundle_count };
