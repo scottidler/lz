@@ -9,11 +9,11 @@ use rayon::prelude::*;
 use secstr::SecUtf8;
 use std::fs;
 use std::fs::File;
-use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::Builder;
 use xz2::read::XzDecoder;
 use xz2::write::XzEncoder;
+use std::str::FromStr;
 
 const STOW: &str = "stow";
 
@@ -61,11 +61,34 @@ struct CommandCli {
         long,
         value_name = "BYTES",
         default_value = "1M",
+        value_parse = parse_size,
         help = "maximum archive size"
     )]
     bundle_size: usize,
 
     patterns: Vec<String>,
+}
+
+#[derive(Debug)]
+struct SizeParseError;
+
+impl std::fmt::Display for SizeParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "Invalid size unit")
+    }
+}
+
+impl std::error::Error for SizeParseError {}
+
+fn parse_size(size: &str) -> Result<usize, SizeParseError> {
+    let (num, unit) = size.split_at(size.len() - 1);
+    let num = usize::from_str(num).map_err(|_| SizeParseError)?;
+    match unit {
+        "K" => Ok(num),
+        "M" => Ok(num * 1024),
+        "G" => Ok(num * 1024 * 1024),
+        _ => Err(SizeParseError),
+    }
 }
 
 fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
