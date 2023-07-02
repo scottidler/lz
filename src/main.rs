@@ -2,6 +2,13 @@
 
 use clap::Parser;
 use eyre::{eyre, Result, WrapErr};
+use log::info;
+use log::LevelFilter;
+use log4rs::{
+    append::file::FileAppender,
+    config::{Appender, Config, Root},
+    encode::pattern::PatternEncoder,
+};
 use orion::hazardous::aead::chacha20poly1305;
 use orion::hazardous::hash::blake2::blake2b::Blake2b;
 use orion::hazardous::stream::chacha20::{Nonce, SecretKey};
@@ -11,18 +18,11 @@ use std::fs;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::str::FromStr;
+use sysinfo::{ProcessExt, System, SystemExt};
 use tempfile::Builder;
 use xz2::read::XzDecoder;
 use xz2::write::XzEncoder;
-use std::str::FromStr;
-use log::info;
-use sysinfo::{ProcessExt, System, SystemExt};
-use log::LevelFilter;
-use log4rs::{
-    append::file::FileAppender,
-    config::{Appender, Config, Root},
-    encode::pattern::PatternEncoder,
-};
 
 const STOW: &str = "stow";
 
@@ -184,7 +184,8 @@ fn get_chunks_and_dirs(
         "get_chunks_and_dirs: entries.len()={} keep_name={} bundle_count={}",
         entries.len(),
         keep_name,
-        bundle_count);
+        bundle_count
+    );
     let bundle_count = if keep_name { 1 } else { bundle_count };
     let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
     let chunks = files.chunks(bundle_count).map(|chunk| chunk.to_vec()).collect();
@@ -195,7 +196,9 @@ fn log_resource_usage() -> Result<()> {
     let my_pid = sysinfo::get_current_pid().map_err(|e| eyre!(e))?;
     let mut system = System::new_all();
     system.refresh_all();
-    let process = system.process(my_pid).ok_or_else(|| eyre!("Failed to find current process"))?;
+    let process = system
+        .process(my_pid)
+        .ok_or_else(|| eyre!("Failed to find current process"))?;
     let memory_usage = process.memory();
     info!("memory: {} KB", memory_usage);
     let num_threads = process.tasks.len();
@@ -319,11 +322,7 @@ fn setup_logging() -> Result<()> {
 
     let config = Config::builder()
         .appender(Appender::builder().build("logfile", Box::new(logfile)))
-        .build(
-            Root::builder()
-                .appender("logfile")
-                .build(LevelFilter::Info),
-        )?;
+        .build(Root::builder().appender("logfile").build(LevelFilter::Info))?;
     log4rs::init_config(config)?;
     Ok(())
 }
