@@ -9,6 +9,7 @@ use rayon::prelude::*;
 use secstr::SecUtf8;
 use std::fs;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use tempfile::Builder;
 use xz2::read::XzDecoder;
@@ -61,7 +62,7 @@ struct CommandCli {
         long,
         value_name = "BYTES",
         default_value = "1M",
-        value_parse = parse_size,
+        value_parser = parse_size,
         help = "maximum archive size"
     )]
     bundle_size: usize,
