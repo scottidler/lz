@@ -146,6 +146,8 @@ fn bundle_7z(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<
         .arg("a")
         .arg("-p")
         .arg("-mhe=on")
+        .arg("-bsp1")
+        .arg("-bso0")
         .arg(output_path)
         .args(paths)
         .stdin(Stdio::piped());
@@ -226,7 +228,11 @@ fn unbundle_7z(path: &Path, password: &SecUtf8) -> Result<()> {
     info!("unbundle_7z: path={path:?}");
 
     let mut command = Command::new(get_7z()?);
-    command.arg("x").arg(path).stdin(Stdio::piped());
+    command.arg("x")
+        .arg("-bsp1")
+        .arg("-bso0")
+        .arg(path)
+        .stdin(Stdio::piped());
 
     info!("unbundle_7z: command: {:?}", command);
 
