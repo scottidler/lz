@@ -22,6 +22,8 @@ use tempfile::Builder;
 use std::io;
 use std::process::{Command, Stdio};
 
+use which::which;
+
 const SEVENZ: &str = "7z";
 
 #[derive(Clone, Debug, Parser)]
@@ -125,12 +127,21 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
     Ok(output_path)
 }
 
+fn get_7z() -> Result<String> {
+    if which("7zz").is_ok() {
+        return Ok("7zz".to_string());
+    }
+    if which("7z").is_ok() {
+        return Ok("7z".to_string());
+    }
+    Err(eyre!("Neither '7zz' nor '7z' program found in the PATH."))
+}
+
 fn bundle_7z(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<()> {
     let cwd = std::env::current_dir()?;
     info!("bundle_7z: paths={paths:?} output_path={output_path:?} cwd={cwd:?}");
 
-    let sevenz = "7zz";
-    let mut command = Command::new(sevenz);
+    let mut command = Command::new(get_7z()?);
     command
         .arg("a")
         .arg("-p")
@@ -176,7 +187,7 @@ fn get_chunks_and_dirs(
     );
     let bundle_count = if keep_name { 1 } else { bundle_count };
     let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
-    let chunks = files.chunks(bundle_count).map(|chunk| chunk.to_vec()).collect();
+    let chunks = files.chunks(bundle_count).map(<[&std::path::PathBuf]>::to_vec).collect();
     (chunks, dirs)
 }
 
@@ -213,8 +224,8 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -
 
 fn unbundle_7z(path: &Path, password: &SecUtf8) -> Result<()> {
     info!("unbundle_7z: path={path:?}");
-    let sevenz = "7zz";
-    let mut command = Command::new(sevenz);
+
+    let mut command = Command::new(get_7z()?);
     command.arg("x").arg(path).stdin(Stdio::piped());
 
     info!("unbundle_7z: command: {:?}", command);
