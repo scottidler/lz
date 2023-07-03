@@ -9,28 +9,20 @@ use log4rs::{
     config::{Appender, Config, Root},
     encode::pattern::PatternEncoder,
 };
-use orion::hazardous::aead::chacha20poly1305;
-use orion::hazardous::hash::blake2::blake2b::Blake2b;
-use orion::hazardous::stream::chacha20::{Nonce, SecretKey};
+
 use rayon::prelude::*;
 use secstr::SecUtf8;
 use std::fs;
-use std::fs::File;
-use std::io::{Read, Write};
+
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
-use sysinfo::{ProcessExt, System, SystemExt};
 use tempfile::Builder;
-use xz2::read::XzDecoder;
-use xz2::write::XzEncoder;
 
 use std::io;
 use std::process::{Command, Stdio};
 
-const STOW: &str = "stow";
 const SEVENZ: &str = "7z";
-
-type Buffer = Vec<u8>;
 
 #[derive(Clone, Debug, Parser)]
 #[command(name = "stow", about = "program for compressing|encrypting every file in a path")]
@@ -217,15 +209,6 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -
         bundle_7z(&[path], &output_path, password)?;
     }
     Ok(())
-}
-
-fn get_load_path(path: &Path, filename: &str) -> Result<PathBuf> {
-    info!("get_load_path: path={path:?} filename={filename}");
-    let output_path = path
-        .parent()
-        .ok_or_else(|| eyre!("Failed to get parent directory"))?
-        .join(filename);
-    Ok(output_path)
 }
 
 fn unbundle_7z(path: &Path, password: &SecUtf8) -> Result<()> {
