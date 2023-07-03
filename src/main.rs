@@ -1,4 +1,4 @@
-//#![allow(unused_imports)]
+//#![allow(unused_imports, dead_code)]
 
 use clap::Parser;
 use eyre::{eyre, Result, WrapErr};
@@ -24,7 +24,11 @@ use tempfile::Builder;
 use xz2::read::XzDecoder;
 use xz2::write::XzEncoder;
 
+use std::io;
+use std::process::{Command, Stdio};
+
 const STOW: &str = "stow";
+const SEVENZ: &str = "7z";
 
 type Buffer = Vec<u8>;
 
@@ -39,11 +43,11 @@ struct Cli {
     config: Option<PathBuf>,
 
     #[clap(subcommand)]
-    command: Option<Command>,
+    action: Option<Action>,
 }
 
 #[derive(Clone, Debug, Parser)]
-enum Command {
+enum Action {
     #[clap(name = "pack", alias = "p", about = "compress|encrypt every file in a path")]
     Pack(CommandCli),
 
@@ -108,11 +112,11 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
             path.file_name()
                 .ok_or_else(|| eyre!("Failed to get file name"))?
                 .to_string_lossy(),
-            STOW
+            SEVENZ
         )
     } else {
         Builder::new()
-            .suffix(&format!(".{STOW}"))
+            .suffix(&format!(".{SEVENZ}"))
             .tempfile()
             .wrap_err("Failed to create temporary file")?
             .path()
@@ -129,48 +133,40 @@ fn get_pack_path(path: &Path, keep_name: bool) -> Result<PathBuf> {
     Ok(output_path)
 }
 
-fn tar_xz(paths: &[&Path]) -> Result<Buffer> {
-    info!("tar_xz: paths={paths:?}");
-    let mut compressed_data = vec![];
-    let xz_encoder = XzEncoder::new(&mut compressed_data, 6);
-    let mut tar_builder = tar::Builder::new(xz_encoder);
-    for path in paths {
-        let filename = path
-            .file_name()
-            .ok_or_else(|| eyre!("Failed to get file name"))?
-            .to_str()
-            .ok_or_else(|| eyre!("Failed to convert file name to string"))?;
-        let mut header = tar::Header::new_gnu();
-        header.set_path(filename)?;
-        header.set_size(path.metadata()?.len());
-        header.set_cksum();
-        tar_builder.append(&header, File::open(path)?)?;
-    }
-    let xz_encoder = tar_builder.into_inner().wrap_err("Failed to finalize tar archive")?;
-    xz_encoder.finish().wrap_err("Failed to finalize compression")?;
-    Ok(compressed_data)
-}
+fn bundle_7z(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<()> {
+    let cwd = std::env::current_dir()?;
+    info!("bundle_7z: paths={paths:?} output_path={output_path:?} cwd={cwd:?}");
 
-fn encrypt(content: &[u8], password: &SecUtf8) -> Result<Buffer> {
-    info!("encrypt: content.len()={}", content.len());
-    let mut hasher = Blake2b::new(32)?;
-    hasher.update(password.unsecure().as_bytes())?;
-    let hashed_password = hasher.finalize()?;
-    let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
-    let nonce = Nonce::from([0u8; 12]);
-    let mut encrypted_content = vec![0u8; content.len() + 16];
-    chacha20poly1305::seal(&secret_key, &nonce, content, None, &mut encrypted_content)?;
-    Ok(encrypted_content)
-}
+    let sevenz = "7zz";
+    let mut command = Command::new(sevenz);
+    command
+        .arg("a")
+        .arg("-p")
+        .arg("-mhe=on")
+        .arg(output_path)
+        .args(paths)
+        .stdin(Stdio::piped());
 
-fn bundle(paths: &[&Path], output_path: &Path, password: &SecUtf8) -> Result<()> {
-    info!("bundle: paths={paths:?} output_path={output_path:?}");
-    let compressed_content = tar_xz(paths)?;
-    let encrypted_content = encrypt(&compressed_content, password)?;
-    fs::File::create(output_path)?.write_all(&encrypted_content)?;
-    for path in paths {
-        std::fs::remove_file(path)?;
+    info!("bundle_7z: command: {:?}", command);
+
+    let mut child = command.spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| eyre!("Failed to get stdin for 7z process"))?;
+    io::Write::write_all(&mut stdin, password.unsecure().as_bytes())?;
+    stdin.flush()?;
+    drop(stdin);
+
+    let status = child.wait()?;
+    if status.success() {
+        for path in paths {
+            std::fs::remove_file(path)?;
+        }
+    } else {
+        return Err(eyre!("7zz command failed with status: {}", status));
     }
+
     Ok(())
 }
 
@@ -192,23 +188,8 @@ fn get_chunks_and_dirs(
     (chunks, dirs)
 }
 
-fn log_resource_usage() -> Result<()> {
-    let my_pid = sysinfo::get_current_pid().map_err(|e| eyre!(e))?;
-    let mut system = System::new_all();
-    system.refresh_all();
-    let process = system
-        .process(my_pid)
-        .ok_or_else(|| eyre!("Failed to find current process"))?;
-    let memory_usage = process.memory();
-    info!("memory: {} KB", memory_usage);
-    let num_threads = process.tasks.len();
-    info!("threads: {}", num_threads);
-    Ok(())
-}
-
 fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -> Result<()> {
     info!("pack: path={path:?} keep_name={keep_name} bundle_count={bundle_count}");
-    log_resource_usage()?;
 
     if path.is_dir() {
         info!("pack: path is dir");
@@ -224,7 +205,7 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -
                 info!("pack: bundle_paths={bundle_paths:?}");
                 let output_path = get_pack_path(chunk[0].as_path(), keep_name)?;
                 info!("pack: output_path={output_path:?}");
-                bundle(&bundle_paths, &output_path, password)
+                bundle_7z(&bundle_paths, &output_path, password)
             })
             .wrap_err("Failed to process file bundles")?;
         dirs.par_iter()
@@ -233,7 +214,7 @@ fn pack(path: &Path, password: &SecUtf8, keep_name: bool, bundle_count: usize) -
         info!("pack: path is file");
         let output_path = get_pack_path(path, keep_name)?;
         info!("pack: output_path={output_path:?}");
-        bundle(&[path], &output_path, password)?;
+        bundle_7z(&[path], &output_path, password)?;
     }
     Ok(())
 }
@@ -247,41 +228,31 @@ fn get_load_path(path: &Path, filename: &str) -> Result<PathBuf> {
     Ok(output_path)
 }
 
-fn decrypt(path: &Path, password: &SecUtf8) -> Result<Buffer> {
-    info!("decrypt: path={path:?}");
-    let mut file_content = vec![];
-    fs::File::open(path)?.read_to_end(&mut file_content)?;
-    let mut hasher = Blake2b::new(32)?;
-    hasher.update(password.unsecure().as_bytes())?;
-    let hashed_password = hasher.finalize()?;
-    let secret_key = SecretKey::from_slice(hashed_password.as_ref())?;
-    let nonce = Nonce::from([0u8; 12]);
-    let mut decrypted_content = vec![0u8; file_content.len() - 16];
-    match chacha20poly1305::open(&secret_key, &nonce, &file_content, None, &mut decrypted_content) {
-        Ok(_) => (),
-        Err(_) => return Err(eyre!("Decryption failed. The provided password may be incorrect.")),
-    };
-    Ok(decrypted_content)
-}
+fn unbundle_7z(path: &Path, password: &SecUtf8) -> Result<()> {
+    info!("unbundle_7z: path={path:?}");
+    let sevenz = "7zz";
+    let mut command = Command::new(sevenz);
+    command.arg("x").arg(path).stdin(Stdio::piped());
 
-fn un_tar_xz(content: &[u8]) -> Result<Vec<(Buffer, String)>> {
-    info!("un_tar_xz: content.len()={}", content.len());
-    let mut xz_decoder = XzDecoder::new(content);
-    let mut tar_archive = tar::Archive::new(&mut xz_decoder);
-    let mut results = vec![];
-    for entry in tar_archive.entries()? {
-        let mut entry = entry?;
-        let mut uncompressed_data = vec![];
-        entry.read_to_end(&mut uncompressed_data)?;
-        let filename = entry
-            .path()
-            .wrap_err("Failed to get file path")?
-            .to_str()
-            .ok_or_else(|| eyre!("Failed to convert file path to string"))?
-            .to_string();
-        results.push((uncompressed_data, filename));
+    info!("unbundle_7z: command: {:?}", command);
+
+    let mut child = command.spawn()?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| eyre!("Failed to get stdin for 7z process"))?;
+    io::Write::write_all(&mut stdin, password.unsecure().as_bytes())?;
+    stdin.flush()?;
+    drop(stdin);
+
+    let status = child.wait()?;
+    if status.success() {
+        std::fs::remove_file(path)?;
+    } else {
+        return Err(eyre!("7z command failed with exit status: {:?}", status.code()));
     }
-    Ok(results)
+
+    Ok(())
 }
 
 fn load(path: &Path, password: &SecUtf8) -> Result<()> {
@@ -291,15 +262,9 @@ fn load(path: &Path, password: &SecUtf8) -> Result<()> {
         let entries: Result<Vec<_>, _> = fs::read_dir(path)?.collect();
         let results: Result<Vec<_>, _> = entries?.par_iter().map(|entry| load(&entry.path(), password)).collect();
         results?;
-    } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(STOW) {
+    } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) == Some(SEVENZ) {
         info!("load: path is file and the extension is stow");
-        let decrypted_content = decrypt(path, password)?;
-        for (decompressed_content, filename) in un_tar_xz(&decrypted_content)? {
-            let output_path = get_load_path(path, &filename)?;
-            info!("load: output_path={output_path:?}");
-            fs::File::create(&output_path)?.write_all(&decompressed_content)?;
-        }
-        std::fs::remove_file(path)?;
+        unbundle_7z(path, password)?;
     }
     Ok(())
 }
@@ -331,14 +296,18 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     setup_logging()?;
 
-    match cli.command {
-        Some(Command::Pack(pack_cli)) => {
-            let bundle_count = if pack_cli.keep_name { 1 } else { pack_cli.bundle_count };
+    match cli.action {
+        Some(Action::Pack(pack_cli)) => {
             for pattern in pack_cli.patterns {
-                pack(Path::new(&pattern), &get_password()?, pack_cli.keep_name, bundle_count)?;
+                pack(
+                    Path::new(&pattern),
+                    &get_password()?,
+                    pack_cli.keep_name,
+                    pack_cli.bundle_count,
+                )?;
             }
         }
-        Some(Command::Load(load_cli)) => {
+        Some(Action::Load(load_cli)) => {
             for pattern in load_cli.patterns {
                 load(Path::new(&pattern), &get_password()?)?;
             }
