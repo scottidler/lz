@@ -189,7 +189,10 @@ fn get_chunks_and_dirs(
     );
     let bundle_count = if keep_name { 1 } else { bundle_count };
     let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
-    let chunks = files.chunks(bundle_count).map(<[&std::path::PathBuf]>::to_vec).collect();
+    let chunks = files
+        .chunks(bundle_count)
+        .map(<[&std::path::PathBuf]>::to_vec)
+        .collect();
     (chunks, dirs)
 }
 
@@ -228,7 +231,8 @@ fn unbundle_7z(path: &Path, password: &SecUtf8) -> Result<()> {
     info!("unbundle_7z: path={path:?}");
 
     let mut command = Command::new(get_7z()?);
-    command.arg("x")
+    command
+        .arg("x")
         .arg("-bsp1")
         .arg("-bso0")
         .arg(path)
