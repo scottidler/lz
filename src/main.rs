@@ -172,9 +172,9 @@ impl Stow {
     fn get_chunks_and_dirs<'a>(&'a self, entries: &'a [PathBuf]) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
         info!("get_chunks_and_dirs: entries.len()={}", entries.len(),);
         let bundle_count = if self.keep_name { 1 } else { self.bundle_count };
-        let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| {
-            path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) != Some(SEVENZ)
-        });
+        let (files, dirs): (Vec<_>, Vec<_>) = entries
+            .iter()
+            .partition(|path| path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) != Some(SEVENZ));
         let chunks = files
             .chunks(bundle_count)
             .map(<[&std::path::PathBuf]>::to_vec)
