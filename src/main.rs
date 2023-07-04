@@ -149,10 +149,7 @@ impl Stow {
         let _7z = get_7z()?;
         let password = get_password()?;
         let _cpus = num_cpus::get();
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(_cpus)
-            .build()
-            .unwrap();
+        let pool = ThreadPoolBuilder::new().num_threads(_cpus).build().unwrap();
 
         let (paths, keep_name, bundle_count, _bundle_size) = match action.clone() {
             Action::Pack(cli) => (cli.paths, cli.keep_name, cli.bundle_count, cli.bundle_size),
@@ -172,16 +169,12 @@ impl Stow {
         })
     }
 
-    fn get_chunks_and_dirs<'a>(
-        &'a self,
-        entries: &'a [PathBuf],
-    ) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
-        info!(
-            "get_chunks_and_dirs: entries.len()={}",
-            entries.len(),
-        );
+    fn get_chunks_and_dirs<'a>(&'a self, entries: &'a [PathBuf]) -> (Vec<Vec<&PathBuf>>, Vec<&PathBuf>) {
+        info!("get_chunks_and_dirs: entries.len()={}", entries.len(),);
         let bundle_count = if self.keep_name { 1 } else { self.bundle_count };
-        let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| path.is_file());
+        let (files, dirs): (Vec<_>, Vec<_>) = entries.iter().partition(|path| {
+            path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) != Some(SEVENZ)
+        });
         let chunks = files
             .chunks(bundle_count)
             .map(<[&std::path::PathBuf]>::to_vec)
@@ -276,9 +269,8 @@ impl Stow {
                     })
                     .wrap_err("Failed to process file bundles")
             })?;
-            dirs.par_iter()
-                .try_for_each(|dir| self.pack(dir))?;
-        } else if path.is_file() {
+            dirs.par_iter().try_for_each(|dir| self.pack(dir))?;
+        } else if path.is_file() && path.extension().and_then(std::ffi::OsStr::to_str) != Some(SEVENZ) {
             info!("pack: path is file");
             let output_path = self.get_pack_path(path)?;
             info!("pack: output_path={output_path:?}");
@@ -343,7 +335,6 @@ impl Stow {
         }
         Ok(())
     }
-
 }
 
 fn main() -> Result<()> {
