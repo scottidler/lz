@@ -139,22 +139,22 @@ struct Stow {
     paths: Vec<PathBuf>,
     keep_name: bool,
     bundle_count: usize,
-    bundle_size: usize,
+    _bundle_size: usize,
     pool: ThreadPool,
-    cpus: usize,
+    _cpus: usize,
 }
 
 impl Stow {
     fn new(action: Action) -> Result<Self> {
         let _7z = get_7z()?;
         let password = get_password()?;
-        let cpus = num_cpus::get();
+        let _cpus = num_cpus::get();
         let pool = ThreadPoolBuilder::new()
-            .num_threads(cpus)
+            .num_threads(_cpus)
             .build()
             .unwrap();
 
-        let (paths, keep_name, bundle_count, bundle_size) = match action.clone() {
+        let (paths, keep_name, bundle_count, _bundle_size) = match action.clone() {
             Action::Pack(cli) => (cli.paths, cli.keep_name, cli.bundle_count, cli.bundle_size),
             Action::Load(cli) => (cli.paths, cli.keep_name, cli.bundle_count, cli.bundle_size),
         };
@@ -166,9 +166,9 @@ impl Stow {
             paths,
             keep_name,
             bundle_count,
-            bundle_size,
+            _bundle_size,
             pool,
-            cpus,
+            _cpus,
         })
     }
 
