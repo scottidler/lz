@@ -219,8 +219,7 @@ impl Stow {
     }
 
     fn bundle_7z(&self, paths: &[&Path], output_path: &Path) -> Result<()> {
-        let cwd = std::env::current_dir()?;
-        info!("bundle_7z: paths={paths:?} output_path={output_path:?} cwd={cwd:?}");
+        info!("bundle_7z: paths={paths:?} output_path={output_path:?}");
 
         let mut command = Command::new(&self._7z);
         command
@@ -232,7 +231,6 @@ impl Stow {
             .arg(output_path)
             .args(paths)
             .stdin(Stdio::piped());
-
         info!("bundle_7z: command: {:?}", command);
 
         let mut child = command.spawn()?;
@@ -289,37 +287,6 @@ impl Stow {
         Ok(())
     }
 
-    // fn pack(&self, path: &Path) -> Result<()> {
-    //     info!("pack: path={path:?}");
-
-    //     if path.is_dir() {
-    //         info!("pack: path is dir");
-    //         let entries: Vec<_> = fs::read_dir(path)?
-    //             .map(|res| res.map(|e| e.path()))
-    //             .collect::<Result<Vec<_>, std::io::Error>>()
-    //             .wrap_err("Failed to read directory entries")?;
-    //         let (chunks, dirs) = self.get_chunks_and_dirs(&entries);
-    //         chunks
-    //             .par_iter()
-    //             .try_for_each(|chunk| {
-    //                 let bundle_paths: Vec<&Path> = chunk.iter().map(AsRef::as_ref).collect();
-    //                 info!("pack: bundle_paths={bundle_paths:?}");
-    //                 let output_path = self.get_pack_path(chunk[0].as_path())?;
-    //                 info!("pack: output_path={output_path:?}");
-    //                 self.bundle_7z(&bundle_paths, &output_path)
-    //             })
-    //             .wrap_err("Failed to process file bundles")?;
-    //         dirs.par_iter()
-    //             .try_for_each(|dir| self.pack(dir))?;
-    //     } else if path.is_file() {
-    //         info!("pack: path is file");
-    //         let output_path = self.get_pack_path(path)?;
-    //         info!("pack: output_path={output_path:?}");
-    //         self.bundle_7z(&[path], &output_path)?;
-    //     }
-    //     Ok(())
-    // }
-
     fn unbundle_7z(&self, path: &Path) -> Result<()> {
         info!("unbundle_7z: path={path:?}");
 
@@ -330,7 +297,6 @@ impl Stow {
             .arg("-bso0")
             .arg(path)
             .stdin(Stdio::piped());
-
         info!("unbundle_7z: command: {:?}", command);
 
         let mut child = command.spawn()?;
@@ -383,13 +349,6 @@ impl Stow {
 fn main() -> Result<()> {
     let cli = Cli::parse();
     setup_logging()?;
-
-    // let num_threads = num_cpus::get();
-    // let pool = rayon::ThreadPoolBuilder::new()
-    //     .num_threads(num_threads)
-    //     .build()
-    //     .wrap_err("Failed to create thread pool")?;
-
     let action = cli.action.ok_or_else(|| eyre!("No action specified"))?;
     let stow = Stow::new(action)?;
     stow.run()?;
