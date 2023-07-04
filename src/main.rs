@@ -9,20 +9,16 @@ use log4rs::{
     config::{Appender, Config, Root},
     encode::pattern::PatternEncoder,
 };
-
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use secstr::SecUtf8;
 use std::fs;
-
+use std::io;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
 use std::str::FromStr;
 use tempfile::Builder;
-
-use std::io;
-use std::process::{Command, Stdio};
-
 use which::which;
 
 const SEVENZ: &str = "7z";
