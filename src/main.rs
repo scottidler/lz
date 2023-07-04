@@ -1,5 +1,12 @@
 //#![allow(unused_imports, dead_code)]
 
+use std::fs;
+use std::io;
+use std::io::Write;
+use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::str::FromStr;
+
 use clap::Parser;
 use eyre::{eyre, Result, WrapErr};
 use log::info;
@@ -12,12 +19,6 @@ use log4rs::{
 use rayon::prelude::*;
 use rayon::{ThreadPool, ThreadPoolBuilder};
 use secstr::SecUtf8;
-use std::fs;
-use std::io;
-use std::io::Write;
-use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
-use std::str::FromStr;
 use tempfile::Builder;
 use which::which;
 
