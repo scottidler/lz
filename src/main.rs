@@ -152,8 +152,7 @@ impl Stow {
         let pool = ThreadPoolBuilder::new().num_threads(_cpus).build()?;
 
         let (paths, keep_name, bundle_count, _bundle_size) = match action.clone() {
-            Action::Pack(cli) => (cli.paths, cli.keep_name, cli.bundle_count, cli.bundle_size),
-            Action::Load(cli) => (cli.paths, cli.keep_name, cli.bundle_count, cli.bundle_size),
+            Action::Pack(cli) | Action::Load(cli) => (cli.paths, cli.keep_name, cli.bundle_count, cli.bundle_size),
         };
 
         Ok(Self {
@@ -329,8 +328,8 @@ impl Stow {
         for path in &self.paths {
             info!("run: path={path:?}");
             match self.action {
-                Action::Pack(_) => self.pack(&path)?,
-                Action::Load(_) => self.load(&path)?,
+                Action::Pack(_) => self.pack(path)?,
+                Action::Load(_) => self.load(path)?,
             }
         }
         Ok(())
